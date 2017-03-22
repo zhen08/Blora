@@ -86,8 +86,6 @@ void RHRouter::addRouteTo(uint8_t dest, uint8_t next_hop, uint8_t state)
 ////////////////////////////////////////////////////////////////////
 RHRouter::RoutingTableEntry* RHRouter::getRouteTo(uint8_t dest)
 {
-	Serial.print("getRouteTo ");
-	Serial.println(dest);
     uint8_t i;
     for (i = 0; i < RH_ROUTING_TABLE_SIZE; i++)
 	if (_routes[i].dest == dest && _routes[i].state != Invalid)

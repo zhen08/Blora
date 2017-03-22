@@ -1,7 +1,7 @@
 // RH_RF95.cpp
 //
 // Copyright (C) 2011 Mike McCauley
-// $Id: RH_RF95.cpp,v 1.11 2016/04/04 01:40:12 mikem Exp $
+// $Id: RH_RF95.cpp,v 1.14 2017/03/04 00:59:41 mikem Exp $
 
 #include <RH_RF95.h>
 
@@ -137,28 +137,38 @@ void RH_RF95::handleInterrupt()
 	_bufLen = len;
 	spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
 
-	// Remember the RSSI of this packet
+	// Remember the last signal to noise ratio, LORA mode
+	// Per page 111, SX1276/77/78/79 datasheet
+	_lastSNR = (int8_t)spiRead(RH_RF95_REG_19_PKT_SNR_VALUE) / 4;
+
+	// Remember the RSSI of this packet, LORA mode
 	// this is according to the doc, but is it really correct?
 	// weakest receiveable signals are reported RSSI at about -66
-	_lastRssi = spiRead(RH_RF95_REG_1A_PKT_RSSI_VALUE) - 137;
-
+	_lastRssi = spiRead(RH_RF95_REG_1A_PKT_RSSI_VALUE);
+	// Adjust the RSSI, datasheet page 87
+	if (_lastSNR < 0)
+	    _lastRssi = _lastRssi + _lastSNR;
+	else
+	    _lastRssi = (int)_lastRssi * 16 / 15;
+	if (_usingHFport)
+	    _lastRssi -= 157;
+	else
+	    _lastRssi -= 164;
+	    
 	// We have received a message.
 	validateRxBuf(); 
 	if (_rxBufValid)
 	    setModeIdle(); // Got one 
-        Serial.println("Got one");
     }
     else if (_mode == RHModeTx && irq_flags & RH_RF95_TX_DONE)
     {
 	_txGood++;
 	setModeIdle();
-        Serial.println("Tx Done");
     }
     else if (_mode == RHModeCad && irq_flags & RH_RF95_CAD_DONE)
     {
         _cad = irq_flags & RH_RF95_CAD_DETECTED;
         setModeIdle();
-        Serial.println("CAD Done");
     }
     
     spiWrite(RH_RF95_REG_12_IRQ_FLAGS, 0xff); // Clear all IRQ flags
@@ -193,15 +203,6 @@ void RH_RF95::validateRxBuf()
     _rxHeaderFrom  = _buf[1];
     _rxHeaderId    = _buf[2];
     _rxHeaderFlags = _buf[3];
-    Serial.print("RH_RF95::validateRxBuf ");
-    Serial.print(_buf[0],HEX);
-    Serial.print(" ");
-    Serial.print(_buf[1],HEX);
-    Serial.print(" ");
-    Serial.print(_buf[2],HEX);
-    Serial.print(" ");
-    Serial.print(_buf[3],HEX);
-    Serial.println(" ");
     if (_promiscuous ||
 	_rxHeaderTo == _thisAddress ||
 	_rxHeaderTo == RH_BROADCAST_ADDRESS)
@@ -216,8 +217,6 @@ bool RH_RF95::available()
     if (_mode == RHModeTx)
 	return false;
     setModeRx();
-    if (_rxBufValid)
-    Serial.println("RH_RF95::available");
     return _rxBufValid; // Will be set by the interrupt handler when a good message is received
 }
 
@@ -227,15 +226,12 @@ void RH_RF95::clearRxBuf()
     _rxBufValid = false;
     _bufLen = 0;
     ATOMIC_BLOCK_END;
-    Serial.println("RH_RF95::clearRxBuf");
 }
 
 bool RH_RF95::recv(uint8_t* buf, uint8_t* len)
 {
     if (!available())
 	return false;
-
-    Serial.print("RH_RF95::recv ");
     if (buf && len)
     {
 	ATOMIC_BLOCK_START;
@@ -244,14 +240,6 @@ bool RH_RF95::recv(uint8_t* buf, uint8_t* len)
 	    *len = _bufLen-RH_RF95_HEADER_LEN;
 	memcpy(buf, _buf+RH_RF95_HEADER_LEN, *len);
 	ATOMIC_BLOCK_END;
-    Serial.print(buf[0],HEX);
-    Serial.print(" ");
-    Serial.print(buf[1],HEX);
-    Serial.print(" ");
-    Serial.print(buf[2],HEX);
-    Serial.print(" ");
-    Serial.print(buf[3],HEX);
-    Serial.println(" ");
     }
     clearRxBuf(); // This message accepted and cleared
     return true;
@@ -281,14 +269,6 @@ bool RH_RF95::send(const uint8_t* data, uint8_t len)
 
     setModeTx(); // Start the transmitter
     // when Tx is done, interruptHandler will fire and radio mode will return to STANDBY
-    Serial.print("RH_RF95::send ");
-    Serial.print(_txHeaderTo, HEX);
-    Serial.print(" ");
-    Serial.print(_txHeaderFrom, HEX);
-    Serial.print(" ");
-    Serial.print(_txHeaderId, HEX);
-    Serial.print(" ");
-    Serial.println(_txHeaderFlags, HEX);
     return true;
 }
 
@@ -320,6 +300,7 @@ bool RH_RF95::setFrequency(float centre)
     spiWrite(RH_RF95_REG_06_FRF_MSB, (frf >> 16) & 0xff);
     spiWrite(RH_RF95_REG_07_FRF_MID, (frf >> 8) & 0xff);
     spiWrite(RH_RF95_REG_08_FRF_LSB, frf & 0xff);
+    _usingHFport = (centre >= 779.0);
 
     return true;
 }
@@ -330,7 +311,6 @@ void RH_RF95::setModeIdle()
     {
 	spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_STDBY);
 	_mode = RHModeIdle;
-    Serial.println("RH_RF95::setModeIdle");
     }
 }
 
@@ -340,7 +320,6 @@ bool RH_RF95::sleep()
     {
 	spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_SLEEP);
 	_mode = RHModeSleep;
-    Serial.println("RH_RF95::sleep");
     }
     return true;
 }
@@ -352,7 +331,6 @@ void RH_RF95::setModeRx()
 	spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_RXCONTINUOUS);
 	spiWrite(RH_RF95_REG_40_DIO_MAPPING1, 0x00); // Interrupt on RxDone
 	_mode = RHModeRx;
-    Serial.println("RH_RF95::setModeRx");
     }
 }
 
@@ -363,7 +341,6 @@ void RH_RF95::setModeTx()
 	spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_TX);
 	spiWrite(RH_RF95_REG_40_DIO_MAPPING1, 0x40); // Interrupt on TxDone
 	_mode = RHModeTx;
-    Serial.println("RH_RF95::setModeTx");
     }
 }
 
@@ -445,8 +422,7 @@ bool RH_RF95::isChannelActive()
         spiWrite(RH_RF95_REG_01_OP_MODE, RH_RF95_MODE_CAD);
         spiWrite(RH_RF95_REG_40_DIO_MAPPING1, 0x80); // Interrupt on CadDone
         _mode = RHModeCad;
-        Serial.println("RH_RF95::isChannelActive");
-   }
+    }
 
     while (_mode == RHModeCad)
         YIELD;
@@ -454,3 +430,40 @@ bool RH_RF95::isChannelActive()
     return _cad;
 }
 
+void RH_RF95::enableTCXO()
+{
+    while ((spiRead(RH_RF95_REG_4B_TCXO) & RH_RF95_TCXO_TCXO_INPUT_ON) != RH_RF95_TCXO_TCXO_INPUT_ON)
+    {
+	sleep();
+	spiWrite(RH_RF95_REG_4B_TCXO, (spiRead(RH_RF95_REG_4B_TCXO) | RH_RF95_TCXO_TCXO_INPUT_ON));
+    } 
+}
+
+// From section 4.1.5 of SX1276/77/78/79
+// Ferror = FreqError * 2**24 * BW / Fxtal / 500
+int RH_RF95::frequencyError()
+{
+    int32_t freqerror = 0;
+
+    // Convert 2.5 bytes (5 nibbles, 20 bits) to 32 bit signed int
+    freqerror = spiRead(RH_RF95_REG_28_FEI_MSB) << 16;
+    freqerror |= spiRead(RH_RF95_REG_29_FEI_MID) << 8;
+    freqerror |= spiRead(RH_RF95_REG_2A_FEI_LSB);
+    // Sign extension into top 3 nibbles
+    if (freqerror & 0x80000)
+	freqerror |= 0xfff00000;
+
+    int error = 0; // In hertz
+    float bw_tab[] = {7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250, 500};
+    uint8_t bwindex = spiRead(RH_RF95_REG_1D_MODEM_CONFIG1) >> 4;
+    if (bwindex < (sizeof(bw_tab) / sizeof(float)))
+	error = (float)freqerror * bw_tab[bwindex] * ((float)(1L << 24) / (float)RH_RF95_FXOSC / 500.0);
+    // else not defined
+
+    return error;
+}
+
+int RH_RF95::lastSNR()
+{
+    return _lastSNR;
+}

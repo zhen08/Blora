@@ -9,7 +9,7 @@
 //
 // Author: Mike McCauley (mikem@airspayce.com)
 // Copyright (C) 2011 Mike McCauley
-// $Id: RHReliableDatagram.cpp,v 1.15 2015/12/11 01:10:24 mikem Exp $
+// $Id: RHReliableDatagram.cpp,v 1.17 2017/03/08 09:30:47 mikem Exp mikem $
 
 #include <RHReliableDatagram.h>
 
@@ -22,6 +22,7 @@ RHReliableDatagram::RHReliableDatagram(RHGenericDriver& driver, uint8_t thisAddr
     _lastSequenceNumber = 0;
     _timeout = RH_DEFAULT_TIMEOUT;
     _retries = RH_DEFAULT_RETRIES;
+    memset(_seenIds, 0, sizeof(_seenIds));
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -80,31 +81,21 @@ bool RHReliableDatagram::sendtoWait(uint8_t* buf, uint8_t len, uint8_t address)
 		uint8_t from, to, id, flags;
 		if (recvfrom(0, 0, &from, &to, &id, &flags)) // Discards the message
 		{
-			Serial.print("Waiting for Ack from ");
-			Serial.print(address, HEX);
-			Serial.print(" to ");
-			Serial.print(_thisAddress,HEX);
-			Serial.print(" seqNo ");
-			Serial.println(thisSequenceNumber, HEX);
-
 		    // Now have a message: is it our ACK?
 		    if (   from == address 
 			   && to == _thisAddress 
 			   && (flags & RH_FLAGS_ACK) 
 			   && (id == thisSequenceNumber))
 		    {
-				Serial.println("Got the Ack waiting for");
 			// Its the ACK we are waiting for
 			return true;
 		    }
 		    else if (   !(flags & RH_FLAGS_ACK)
 				&& (id == _seenIds[from]))
 		    {
-				Serial.println("Ack it again");
 			// This is a request we have already received. ACK it again
 			acknowledge(id, from);
 		    }
-				Serial.println("Discard");
 		    // Else discard it
 		}
 	    }
@@ -131,9 +122,10 @@ bool RHReliableDatagram::recvfromAck(uint8_t* buf, uint8_t* len, uint8_t* from, 
 	// Never ACK an ACK
 	if (!(_flags & RH_FLAGS_ACK))
 	{
-	    // Its a normal message for this node, not an ACK
-	    if (_to != RH_BROADCAST_ADDRESS)
+	    // Its a normal message not an ACK
+	    if (_to ==_thisAddress)
 	    {
+	        // Its for this node and
 		// Its not a broadcast, so ACK it
 		// Acknowledge message with ACK set in flags and ID set to received ID
 		acknowledge(_id, _from);
@@ -183,7 +175,6 @@ void RHReliableDatagram::resetRetransmissions()
  
 void RHReliableDatagram::acknowledge(uint8_t id, uint8_t from)
 {
-	delay(10);
     setHeaderId(id);
     setHeaderFlags(RH_FLAGS_ACK);
     // We would prefer to send a zero length ACK,
