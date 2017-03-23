@@ -35,7 +35,7 @@ bool Lora::init()
     return false;
   }
   
-  if (!driver.setModemConfig(RH_RF95::Bw125Cr45Sf128))
+  if (!driver.setModemConfig(RH_RF95::Bw125Cr48Sf4096))
   {
     Serial.println("setModemConfig failed");
     return false;

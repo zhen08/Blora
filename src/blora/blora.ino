@@ -13,7 +13,6 @@ void setup()
 {
   pinMode(led, OUTPUT);
   Serial.begin(9600);
-  //while (!Serial) ; // Wait for serial port to be available
   delay(1000);
   Serial.println("Starting");
   ble.init();
