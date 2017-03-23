@@ -20,6 +20,7 @@ uint8_t RHMesh::_tmpMessage[RH_ROUTER_MAX_MESSAGE_LEN];
 RHMesh::RHMesh(RHGenericDriver& driver, uint8_t thisAddress) 
     : RHRouter(driver, thisAddress)
 {
+    arpTimeout = RH_MESH_ARP_TIMEOUT;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -66,7 +67,7 @@ bool RHMesh::doArp(uint8_t address)
     // FIXME: timeout should be configurable
     unsigned long starttime = millis();
     int32_t timeLeft;
-    while ((timeLeft = RH_MESH_ARP_TIMEOUT - (millis() - starttime)) > 0)
+    while ((timeLeft = arpTimeout - (millis() - starttime)) > 0)
     {
 	if (waitAvailableTimeout(timeLeft))
 	{
@@ -85,6 +86,12 @@ bool RHMesh::doArp(uint8_t address)
 	YIELD;
     }
     return false;
+}
+
+////////////////////////////////////////////////////////////////////
+void RHMesh::setArpTimeout(unsigned long value)
+{
+    arpTimeout = value;
 }
 
 ////////////////////////////////////////////////////////////////////
